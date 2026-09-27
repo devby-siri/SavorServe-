@@ -3,7 +3,7 @@ import { Send, Bot, RotateCcw } from 'lucide-react';
 import ChatMessage from '../components/ChatMessage';
 import { processUserMessage } from '../services/chatbotEngine';
 
-export default function ChatPage({ menu, cart, onAddToCart, onRemoveItem, onClearCart, onNavigate }) {
+export default function ChatPage({ menu, cart, onAddToCart, onAddMultipleToCart, onRemoveItem, onClearCart, onNavigate }) {
   const [messages, setMessages] = useState([
     {
       id: "m1",
@@ -47,11 +47,13 @@ export default function ChatPage({ menu, cart, onAddToCart, onRemoveItem, onClea
 
       // Execute Cart Side Effects
       if (botResult.actionType === "ADD_ITEMS" && botResult.itemsToAdd) {
-        botResult.itemsToAdd.forEach(entry => {
-          for (let i = 0; i < entry.quantity; i++) {
-            onAddToCart(entry.item);
-          }
-        });
+        if (onAddMultipleToCart) {
+          onAddMultipleToCart(botResult.itemsToAdd);
+        } else {
+          botResult.itemsToAdd.forEach(entry => {
+            onAddToCart(entry.item, entry.quantity);
+          });
+        }
       } else if (botResult.actionType === "CLEAR_CART") {
         onClearCart();
       } else if (botResult.actionType === "REMOVE_ITEM" && botResult.item) {

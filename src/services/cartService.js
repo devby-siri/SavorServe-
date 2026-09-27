@@ -1,4 +1,4 @@
-import { OFFERS } from '../data/offers';
+import { OFFERS } from '../data/offers.js';
 
 export const calculateCartTotals = (cart) => {
   const subtotal = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);

@@ -2,8 +2,10 @@ import React, { useState } from 'react';
 import { calculateCartTotals } from '../services/cartService';
 import { storageService } from '../services/storageService';
 
-export default function CheckoutPage({ cart, onOrderPlaced }) {
-  const { subtotal, discount, tax, total } = calculateCartTotals(cart);
+export default function CheckoutPage({ cart, onOrderPlaced, onNavigate }) {
+  // Use cart from prop or fallback to storageService
+  const activeCart = (cart && cart.length > 0) ? cart : storageService.getCart();
+  const { subtotal, discount, tax, total } = calculateCartTotals(activeCart);
 
   const [formData, setFormData] = useState({
     name: '',
@@ -20,6 +22,10 @@ export default function CheckoutPage({ cart, onOrderPlaced }) {
 
   const validate = () => {
     let errs = {};
+    if (activeCart.length === 0) {
+      alert("Your cart is empty! Please add some dishes first.");
+      return false;
+    }
     if (!formData.name.trim()) errs.name = "Name is required";
     if (!formData.phone.trim() || formData.phone.length < 10) errs.phone = "Valid phone is required";
     if (formData.orderType === 'Delivery') {
@@ -43,7 +49,7 @@ export default function CheckoutPage({ cart, onOrderPlaced }) {
 
     const newOrder = {
       orderId,
-      items: cart,
+      items: activeCart,
       customer: formData,
       subtotal,
       discount,
@@ -191,17 +197,37 @@ export default function CheckoutPage({ cart, onOrderPlaced }) {
 
         {/* Mini Order Summary */}
         <div className="md:col-span-2 bg-white p-6 rounded-2xl border border-[#D4A24C]/30 shadow-xs h-max space-y-4">
-          <h3 className="font-bold font-serif text-[#2B2118] border-b pb-2">Order Items</h3>
+          <h3 className="font-bold font-serif text-[#2B2118] border-b pb-2 flex justify-between items-center">
+            <span>Order Items</span>
+            <span className="text-xs font-sans text-[#756B63] font-normal">
+              ({activeCart.reduce((sum, i) => sum + i.quantity, 0)} items)
+            </span>
+          </h3>
           <div className="space-y-3 max-h-60 overflow-y-auto">
-            {cart.map((item) => (
-              <div key={item.id} className="flex justify-between text-xs">
-                <div>
-                  <span className="font-bold text-[#2B2118]">{item.name}</span>
-                  <span className="text-[#756B63] block">Qty: {item.quantity}</span>
-                </div>
-                <span className="font-semibold text-[#6B1E2B]">₹{item.price * item.quantity}</span>
+            {activeCart.length === 0 ? (
+              <div className="text-center py-6 space-y-2">
+                <p className="text-xs text-[#756B63]">Your cart is empty.</p>
+                {onNavigate && (
+                  <button
+                    type="button"
+                    onClick={() => onNavigate('menu')}
+                    className="text-xs font-bold text-[#6B1E2B] underline"
+                  >
+                    Go to Menu
+                  </button>
+                )}
               </div>
-            ))}
+            ) : (
+              activeCart.map((item) => (
+                <div key={item.id} className="flex justify-between items-center text-xs pb-2 border-b border-gray-100 last:border-b-0">
+                  <div>
+                    <span className="font-bold text-[#2B2118] block">{item.name}</span>
+                    <span className="text-[#756B63] block text-[11px]">Qty: {item.quantity} × ₹{item.price}</span>
+                  </div>
+                  <span className="font-semibold text-[#6B1E2B]">₹{item.price * item.quantity}</span>
+                </div>
+              ))
+            )}
           </div>
 
           <div className="border-t pt-3 text-xs space-y-1.5 text-[#756B63]">

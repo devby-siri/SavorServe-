@@ -1,33 +1,195 @@
-import { calculateCartTotals } from './cartService';
+import { calculateCartTotals } from './cartService.js';
+import { storageService } from './storageService.js';
 
-// Extract numbers from word forms or digits
-const parseQuantity = (text) => {
-  const numberWords = {
-    one: 1, a: 1, an: 1, single: 1,
-    two: 2, double: 2,
-    three: 3,
-    four: 4,
-    five: 5,
-    six: 6,
-    seven: 7,
-    eight: 8,
-    nine: 9,
-    ten: 10
-  };
+const NUMBER_WORDS = {
+  a: 1, an: 1, one: 1, single: 1,
+  two: 2, double: 2, couple: 2, pair: 2,
+  three: 3, triple: 3,
+  four: 4,
+  five: 5,
+  six: 6,
+  seven: 7,
+  eight: 8,
+  nine: 9,
+  ten: 10
+};
 
-  const match = text.match(/\b\d+\b/);
-  if (match) return parseInt(match[0], 10);
+// Aliases for accurate entity matching
+const ALIASES = [
+  // Pizzas
+  { id: 'p3', patterns: ['paneer tikka pizzas', 'paneer tikka pizza', 'paneer pizzas', 'paneer pizza', 'paneer tikka'] },
+  { id: 'p2', patterns: ['farmhouse pizzas', 'farmhouse pizza', 'farm house pizzas', 'farm house pizza', 'farmhouse', 'farm house'] },
+  { id: 'p1', patterns: ['margherita pizzas', 'margherita pizza', 'margarita pizzas', 'margarita pizza', 'margheritas', 'margherita', 'margarita'] },
+  
+  // Burgers
+  { id: 'b2', patterns: ['cheese burgers', 'cheese burger', 'cheeseburgers', 'cheeseburger'] },
+  { id: 'b3', patterns: ['paneer burgers', 'paneer burger'] },
+  { id: 'b1', patterns: ['veg burgers', 'veg burger', 'veggie burgers', 'veggie burger', 'burgers', 'burger'] },
+  
+  // Pastas
+  { id: 'pa1', patterns: ['white sauce pastas', 'white sauce pasta', 'white pastas', 'white pasta', 'white sauce'] },
+  { id: 'pa2', patterns: ['red sauce pastas', 'red sauce pasta', 'red pastas', 'red pasta', 'red sauce', 'arrabbiata', 'arrabiata'] },
+  { id: 'pa3', patterns: ['alfredo pastas', 'alfredo pasta', 'alfredo'] },
+  
+  // Sides
+  { id: 's2', patterns: ['peri peri fries', 'peri-peri fries', 'peri peri fry', 'peri peri', 'periperi fries'] },
+  { id: 's1', patterns: ['french fries', 'french fry', 'frenchfries', 'fries', 'fry'] },
+  { id: 's3', patterns: ['garlic breads', 'garlic bread'] },
+  
+  // Beverages
+  { id: 'bev3', patterns: ['cold coffees', 'cold coffee', 'iced coffees', 'iced coffee'] },
+  { id: 'bev2', patterns: ['fresh lime sodas', 'fresh lime soda', 'lime sodas', 'lime soda', 'lemon sodas', 'lemon soda'] },
+  { id: 'bev1', patterns: ['coca-colas', 'coca-cola', 'coca colas', 'coca cola', 'cokes', 'coke', 'colas', 'cola'] },
+  
+  // Desserts
+  { id: 'd1', patterns: ['chocolate brownies', 'chocolate brownie', 'choco brownies', 'choco brownie', 'brownies', 'brownie'] },
+  { id: 'd2', patterns: ['ice creams', 'ice cream', 'icecreams', 'icecream', 'vanilla ice cream'] }
+];
 
-  for (const [word, val] of Object.entries(numberWords)) {
-    const regex = new RegExp(`\\b${word}\\b`, 'i');
-    if (regex.test(text)) return val;
+// Accurately extract each individual item and its corresponding quantity
+export const extractOrderItems = (text, menuList) => {
+  const normalized = text.toLowerCase();
+  const candidates = [];
+
+  // 1. Add predefined aliases
+  ALIASES.forEach(alias => {
+    const item = menuList.find(m => m.id === alias.id || m.name.toLowerCase() === alias.patterns[0]);
+    if (item) {
+      alias.patterns.forEach(pat => {
+        candidates.push({ pattern: pat, item });
+      });
+    }
+  });
+
+  // 2. Add dynamic menu items
+  menuList.forEach(item => {
+    const nameLower = item.name.toLowerCase();
+    candidates.push({ pattern: nameLower, item });
+    if (!nameLower.endsWith('s')) {
+      candidates.push({ pattern: nameLower + 's', item });
+    }
+  });
+
+  // Sort by length descending so longer/more specific patterns match first
+  candidates.sort((a, b) => b.pattern.length - a.pattern.length);
+
+  // Find non-overlapping occurrences
+  const occupiedIndices = new Set();
+  const matchedOccurrences = [];
+
+  for (const { pattern, item } of candidates) {
+    const escaped = pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regex = new RegExp(`\\b${escaped}\\b`, 'gi');
+    let match;
+    while ((match = regex.exec(normalized)) !== null) {
+      const start = match.index;
+      const end = start + match[0].length;
+      
+      let overlaps = false;
+      for (let i = start; i < end; i++) {
+        if (occupiedIndices.has(i)) {
+          overlaps = true;
+          break;
+        }
+      }
+
+      if (!overlaps) {
+        for (let i = start; i < end; i++) {
+          occupiedIndices.add(i);
+        }
+        matchedOccurrences.push({
+          item,
+          start,
+          end,
+          matchedText: match[0]
+        });
+      }
+    }
   }
 
-  return 1; // default fallback
+  if (matchedOccurrences.length === 0) {
+    return [];
+  }
+
+  // Sort matches by position in the text
+  matchedOccurrences.sort((a, b) => a.start - b.start);
+
+  const result = [];
+  
+  for (let idx = 0; idx < matchedOccurrences.length; idx++) {
+    const occ = matchedOccurrences[idx];
+    const prevEnd = idx === 0 ? 0 : matchedOccurrences[idx - 1].end;
+    const nextStart = idx === matchedOccurrences.length - 1 ? normalized.length : matchedOccurrences[idx + 1].start;
+
+    // Window before this item
+    const textBefore = normalized.slice(prevEnd, occ.start);
+    // Window after this item
+    const textAfter = normalized.slice(occ.end, nextStart);
+
+    let quantity = null;
+
+    // Scope textBefore to text AFTER any delimiter ('and', ',', '+', '&', 'with')
+    const separatorBeforeMatch = textBefore.match(/(?:^|.*[\s,])(?:and|&|\+|with|,)\s*(.*)$/i);
+    const relevantBefore = separatorBeforeMatch ? separatorBeforeMatch[1] : textBefore;
+
+    // Scope textAfter to text BEFORE any delimiter
+    const separatorAfterMatch = textAfter.match(/^(.*?)(?:[\s,]*(?:and|&|\+|with|,)|$)/i);
+    const relevantAfter = separatorAfterMatch ? separatorAfterMatch[1] : textAfter;
+
+    // 1. Check for quantity before item (e.g. "i want 2 cheese burgers" -> "2")
+    const numberTokensRegex = /\b(\d+|one|two|three|four|five|six|seven|eight|nine|ten|a|an|single|double)\b/gi;
+    const matchesBefore = [...relevantBefore.matchAll(numberTokensRegex)];
+
+    if (matchesBefore.length > 0) {
+      const lastMatch = matchesBefore[matchesBefore.length - 1][0].toLowerCase();
+      if (NUMBER_WORDS[lastMatch] !== undefined) {
+        quantity = NUMBER_WORDS[lastMatch];
+      } else {
+        const parsed = parseInt(lastMatch, 10);
+        if (!isNaN(parsed) && parsed > 0 && parsed <= 50) {
+          quantity = parsed;
+        }
+      }
+    }
+
+    // 2. Check for quantity after item (e.g. "cheese burger x 2")
+    if (quantity === null) {
+      const matchAfter = relevantAfter.match(/^\s*(?:x|\*|of|qty|quantity)?\s*(\b\d+\b|\b(?:one|two|three|four|five|six|seven|eight|nine|ten)\b)/i);
+      if (matchAfter) {
+        const val = matchAfter[1].toLowerCase();
+        if (NUMBER_WORDS[val] !== undefined) {
+          quantity = NUMBER_WORDS[val];
+        } else {
+          const parsed = parseInt(val, 10);
+          if (!isNaN(parsed) && parsed > 0 && parsed <= 50) {
+            quantity = parsed;
+          }
+        }
+      }
+    }
+
+    // Default to 1
+    if (quantity === null || quantity <= 0) {
+      quantity = 1;
+    }
+
+    const existing = result.find(r => r.item.id === occ.item.id);
+    if (existing) {
+      existing.quantity += quantity;
+    } else {
+      result.push({
+        item: occ.item,
+        quantity
+      });
+    }
+  }
+
+  return result;
 };
 
 export const processUserMessage = (userInput, currentCart, menuList, navigateTo) => {
   const text = userInput.trim().toLowerCase();
+  const effectiveCart = (currentCart && currentCart.length > 0) ? currentCart : storageService.getCart();
   
   // 1. GREETING INTENT
   if (/^(hi|hello|hey|greetings|good morning|good evening|namaste|sup)\b/i.test(text)) {
@@ -60,7 +222,7 @@ export const processUserMessage = (userInput, currentCart, menuList, navigateTo)
 
   // 3. SHOW CART / TOTAL INTENT
   if (text.includes("cart") || text.includes("total") || text.includes("bill") || text.includes("my order")) {
-    if (currentCart.length === 0) {
+    if (effectiveCart.length === 0) {
       return {
         text: "🛒 Your cart is currently empty!\n\nWould you like to check out our menu and add something delicious?",
         quickButtons: [
@@ -70,9 +232,9 @@ export const processUserMessage = (userInput, currentCart, menuList, navigateTo)
       };
     }
 
-    const { subtotal, discount, tax, total } = calculateCartTotals(currentCart);
+    const { subtotal, discount, tax, total } = calculateCartTotals(effectiveCart);
     let summaryText = "🛒 **Your Current Cart Summary:**\n\n";
-    currentCart.forEach(i => {
+    effectiveCart.forEach(i => {
       summaryText += `• ${i.name} × ${i.quantity} = ₹${i.price * i.quantity}\n`;
     });
     summaryText += `\nSubtotal: ₹${subtotal}\nDiscount: -₹${discount}\nTax (5% GST): ₹${tax}\n**Final Total: ₹${total}**`;
@@ -80,7 +242,7 @@ export const processUserMessage = (userInput, currentCart, menuList, navigateTo)
     return {
       text: summaryText,
       quickButtons: [
-        { label: "Proceed to Checkout", query: "Checkout" },
+        { label: "Proceed to Checkout 🚀", action: () => navigateTo('checkout') },
         { label: "Add More Food", query: "Show menu" },
         { label: "Clear Cart", query: "Clear my cart" }
       ]
@@ -89,16 +251,16 @@ export const processUserMessage = (userInput, currentCart, menuList, navigateTo)
 
   // 4. CHECKOUT / PLACE ORDER INTENT
   if (text.includes("checkout") || text.includes("place order") || text.includes("pay") || text.includes("confirm order")) {
-    if (currentCart.length === 0) {
+    if (effectiveCart.length === 0) {
       return {
         text: "⚠️ Your cart is empty! Please add some items before checking out.",
         quickButtons: [{ label: "View Menu", query: "Show menu" }]
       };
     }
 
-    const { subtotal, discount, tax, total } = calculateCartTotals(currentCart);
+    const { subtotal, discount, tax, total } = calculateCartTotals(effectiveCart);
     let checkoutSummary = "📋 **Order Summary Before Checkout:**\n\n";
-    currentCart.forEach(i => {
+    effectiveCart.forEach(i => {
       checkoutSummary += `• ${i.name} × ${i.quantity} — ₹${i.price * i.quantity}\n`;
     });
     checkoutSummary += `\nSubtotal: ₹${subtotal}\nDiscount: -₹${discount}\nTax: ₹${tax}\n**Total Amount: ₹${total}**\n\nReady to enter delivery details and place order?`;
@@ -134,7 +296,40 @@ export const processUserMessage = (userInput, currentCart, menuList, navigateTo)
     }
   }
 
-  // 7. MENU / CATEGORY REQUEST
+  // 7. PRICE INQUIRY (Check before Add to Cart)
+  if (text.includes("how much") || text.includes("price") || text.includes("cost")) {
+    const matched = menuList.find(i => text.includes(i.name.toLowerCase()));
+    if (matched) {
+      return {
+        text: `💰 **${matched.name}** costs **₹${matched.price}**.\n\nDescription: ${matched.description}`,
+        quickButtons: [{ label: `Add ${matched.name}`, query: `I want 1 ${matched.name}` }]
+      };
+    }
+  }
+
+  // 8. ADD TO CART INTENT (Multi-item individual quantity extraction)
+  const itemsToAdd = extractOrderItems(text, menuList);
+
+  if (itemsToAdd.length > 0) {
+    let replyText = "🎉 **Added to your cart:**\n\n";
+    itemsToAdd.forEach(entry => {
+      replyText += `• **${entry.quantity} × ${entry.item.name}** (₹${entry.item.price * entry.quantity})\n`;
+    });
+    replyText += "\nWhat would you like to do next?";
+
+    return {
+      text: replyText,
+      actionType: "ADD_ITEMS",
+      itemsToAdd,
+      quickButtons: [
+        { label: "Proceed to Checkout 🚀", action: () => navigateTo('checkout') },
+        { label: "View Cart 🛒", query: "Show my cart" },
+        { label: "Add Drinks 🥤", query: "Show beverages" }
+      ]
+    };
+  }
+
+  // 9. MENU / CATEGORY REQUEST
   if (text.includes("menu") || text.includes("categories") || text.includes("what do you have") || text.includes("popular")) {
     if (text.includes("pizza")) {
       const pizzas = menuList.filter(m => m.category === "Pizza");
@@ -167,54 +362,13 @@ export const processUserMessage = (userInput, currentCart, menuList, navigateTo)
             "🍟 **Sides**: French Fries, Peri Peri Fries, Garlic Bread\n" +
             "🥤 **Beverages**: Coke, Fresh Lime Soda, Cold Coffee\n" +
             "🍨 **Desserts**: Chocolate Brownie, Ice Cream\n\n" +
-            "What would you like to order? You can type e.g., *'I want 2 Cheese Burgers'*",
+            "What would you like to order? You can type e.g., *'I want 2 Cheese Burgers and 1 Chocolate Brownie'*",
       quickButtons: [
         { label: "Show Pizzas", query: "Show me pizzas" },
         { label: "Show Burgers", query: "Show me burgers" },
         { label: "Show Beverages", query: "Show beverages" }
       ]
     };
-  }
-
-  // 8. ADD TO CART INTENT (Multi-item or direct item parsing)
-  let itemsToAdd = [];
-  menuList.forEach(item => {
-    const itemNameLower = item.name.toLowerCase();
-    // match exact name or key word
-    if (text.includes(itemNameLower) || (itemNameLower.includes("coke") && text.includes("coke")) || (itemNameLower.includes("fries") && text.includes("fries"))) {
-      const qty = parseQuantity(text);
-      itemsToAdd.push({ item, quantity: qty });
-    }
-  });
-
-  if (itemsToAdd.length > 0) {
-    let replyText = "🎉 **Added to your cart:**\n\n";
-    itemsToAdd.forEach(entry => {
-      replyText += `• **${entry.quantity} × ${entry.item.name}** (₹${entry.item.price * entry.quantity})\n`;
-    });
-    replyText += "\nWhat would you like to do next?";
-
-    return {
-      text: replyText,
-      actionType: "ADD_ITEMS",
-      itemsToAdd,
-      quickButtons: [
-        { label: "View Cart", query: "Show my cart" },
-        { label: "Add Drinks", query: "Show beverages" },
-        { label: "Checkout Now", query: "Checkout" }
-      ]
-    };
-  }
-
-  // 9. PRICE INQUIRY
-  if (text.includes("how much") || text.includes("price") || text.includes("cost")) {
-    const matched = menuList.find(i => text.includes(i.name.toLowerCase()));
-    if (matched) {
-      return {
-        text: `💰 **${matched.name}** costs **₹${matched.price}**.\n\nDescription: ${matched.description}`,
-        quickButtons: [{ label: `Add ${matched.name}`, query: `I want 1 ${matched.name}` }]
-      };
-    }
   }
 
   // 10. RECOMMENDATIONS
@@ -235,7 +389,7 @@ export const processUserMessage = (userInput, currentCart, menuList, navigateTo)
   return {
     text: "🤔 I'm not sure I understood that request.\n\nYou can ask me things like:\n" +
           "• *Show me the menu*\n" +
-          "• *I want 2 cheese burgers and 1 coke*\n" +
+          "• *I want 2 cheese burgers and 1 chocolate brownie*\n" +
           "• *Show my cart*\n" +
           "• *Any offers?*\n" +
           "• *Place my order*",

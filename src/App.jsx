@@ -15,13 +15,13 @@ import { storageService } from './services/storageService';
 
 export default function App() {
   const [activePage, setActivePage] = useState('home'); // 'home' | 'menu' | 'chat' | 'checkout' | 'tracker' | 'history' | 'admin'
-  const [menu, setMenu] = useState([]);
-  const [cart, setCart] = useState([]);
+  const [menu, setMenu] = useState(() => storageService.getMenu());
+  const [cart, setCart] = useState(() => storageService.getCart());
   const [isCartOpen, setIsCartOpen] = useState(false);
   const [trackedOrder, setTrackedOrder] = useState(null);
 
   useEffect(() => {
-    // Load initial persistent menu & cart
+    // Keep in sync with storage
     setMenu(storageService.getMenu());
     setCart(storageService.getCart());
   }, []);
@@ -31,32 +31,62 @@ export default function App() {
     storageService.saveCart(newCart);
   };
 
-  const handleAddToCart = (item) => {
-    const existing = cart.find(c => c.id === item.id);
-    if (existing) {
-      const updated = cart.map(c => c.id === item.id ? { ...c, quantity: c.quantity + 1 } : c);
-      saveAndSetCart(updated);
-    } else {
-      saveAndSetCart([...cart, { ...item, quantity: 1 }]);
-    }
+  const handleAddToCart = (item, quantity = 1) => {
+    setCart(prevCart => {
+      const existing = prevCart.find(c => c.id === item.id);
+      let updated;
+      if (existing) {
+        updated = prevCart.map(c => c.id === item.id ? { ...c, quantity: c.quantity + quantity } : c);
+      } else {
+        updated = [...prevCart, { ...item, quantity }];
+      }
+      storageService.saveCart(updated);
+      return updated;
+    });
+  };
+
+  const handleAddMultipleToCart = (entries) => {
+    setCart(prevCart => {
+      let updated = [...prevCart];
+      entries.forEach(({ item, quantity }) => {
+        const existingIndex = updated.findIndex(c => c.id === item.id);
+        if (existingIndex > -1) {
+          updated[existingIndex] = {
+            ...updated[existingIndex],
+            quantity: updated[existingIndex].quantity + quantity
+          };
+        } else {
+          updated.push({ ...item, quantity });
+        }
+      });
+      storageService.saveCart(updated);
+      return updated;
+    });
   };
 
   const handleUpdateQuantity = (id, newQty) => {
     if (newQty <= 0) {
       handleRemoveItem(id);
     } else {
-      const updated = cart.map(c => c.id === id ? { ...c, quantity: newQty } : c);
-      saveAndSetCart(updated);
+      setCart(prevCart => {
+        const updated = prevCart.map(c => c.id === id ? { ...c, quantity: newQty } : c);
+        storageService.saveCart(updated);
+        return updated;
+      });
     }
   };
 
   const handleRemoveItem = (id) => {
-    const updated = cart.filter(c => c.id !== id);
-    saveAndSetCart(updated);
+    setCart(prevCart => {
+      const updated = prevCart.filter(c => c.id !== id);
+      storageService.saveCart(updated);
+      return updated;
+    });
   };
 
   const handleClearCart = () => {
-    saveAndSetCart([]);
+    setCart([]);
+    storageService.saveCart([]);
   };
 
   const handleOrderPlaced = (order) => {
@@ -102,6 +132,7 @@ export default function App() {
             menu={menu} 
             cart={cart} 
             onAddToCart={handleAddToCart} 
+            onAddMultipleToCart={handleAddMultipleToCart}
             onRemoveItem={handleRemoveItem} 
             onClearCart={handleClearCart} 
             onNavigate={setActivePage} 
@@ -112,6 +143,7 @@ export default function App() {
           <CheckoutPage 
             cart={cart} 
             onOrderPlaced={handleOrderPlaced} 
+            onNavigate={setActivePage}
           />
         )}
 
